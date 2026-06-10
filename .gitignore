@@ -1,0 +1,49 @@
+# Node.js
+**/node_modules/
+npm-debug.log
+yarn-error.log
+dist/
+build/
+**/.env
+
+# WhatsApp Bot
+**/.wpp_session/
+
+# Python
+**/__pycache__/
+*.py[cod]
+*$py.class
+**/venv/
+**/.venv/
+**/env/
+.pytest_cache/
+.coverage
+htmlcov/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+.playwright/
+
+# Ambientes / SO / IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
