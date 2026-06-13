@@ -178,6 +178,7 @@ router.post('/campanhas/:id/iniciar', async (req, res) => {
 
       // Verifica se finalizou
       const atualizada = await Campanha.findById(camp._id)
+      if (!atualizada) return
       const todosFeitos = atualizada.disparos.every(x => x.status !== 'pendente')
       if (todosFeitos) {
         await Campanha.findByIdAndUpdate(camp._id, { status: 'finalizada', finalizadoEm: new Date() })
@@ -193,6 +194,14 @@ router.post('/campanhas/:id/iniciar', async (req, res) => {
           $inc: { totalErros: 1 },
         }
       )
+
+      // Verifica se finalizou
+      const atualizada = await Campanha.findById(camp._id)
+      if (!atualizada) return
+      const todosFeitos = atualizada.disparos.every(x => x.status !== 'pendente')
+      if (todosFeitos) {
+        await Campanha.findByIdAndUpdate(camp._id, { status: 'finalizada', finalizadoEm: new Date() })
+      }
     },
   }))
 
