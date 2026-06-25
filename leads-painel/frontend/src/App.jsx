@@ -1,11 +1,13 @@
 // src/App.jsx
 import { useState, useEffect, useCallback } from 'react'
 import axios from 'axios'
-import Sidebar from './components/Sidebar.jsx'
+import { Crosshair, Search, Send, Loader2, CheckCircle } from 'lucide-react'
+import FilterBar from './components/FilterBar.jsx'
 import StatsBar from './components/StatsBar.jsx'
 import LeadsTable from './components/LeadsTable.jsx'
 import Pagination from './components/Pagination.jsx'
 import DisparosTab from './components/DisparosTab.jsx'
+import NovoLeadModal from './components/NovoLeadModal.jsx'
 
 const API = '/api'
 const BOT_API = 'http://localhost:3001/api'
@@ -121,37 +123,131 @@ export default function App() {
   }
 
   return (
-    <div style={{ display: 'flex', height: '100vh', overflow: 'hidden' }}>
-      <Sidebar filtros={filtros} stats={stats} onChange={aplicarFiltros} />
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden' }}>
 
-      <main style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', minWidth: 0 }}>
-
-        {/* Abas */}
-        <div style={{
-          display: 'flex', alignItems: 'center', gap: 2,
-          padding: '0 24px', borderBottom: '1px solid var(--border)',
-          background: 'var(--bg-card)', flexShrink: 0,
-        }}>
-          {[
-            { id: 'leads', label: '🎯 Leads' },
-            { id: 'disparos', label: `📤 Disparos${selecionados.length ? ` (${selecionados.length})` : ''}` },
-          ].map(a => (
-            <button key={a.id} onClick={() => setAba(a.id)} style={{
-              padding: '13px 18px', background: 'none', border: 'none',
-              cursor: 'pointer', fontSize: 13, fontWeight: 600,
-              fontFamily: 'var(--font-body)',
-              color: aba === a.id ? 'var(--blue)' : 'var(--text-2)',
-              borderBottom: aba === a.id ? '2px solid var(--blue)' : '2px solid transparent',
-              marginBottom: -1, transition: 'all 0.15s',
-            }}>
-              {a.label}
-            </button>
-          ))}
+      {/* ── Header ─────────────────────────────── */}
+      <header style={{
+        display: 'flex', alignItems: 'center', gap: 14,
+        padding: '0 32px', height: 52, flexShrink: 0,
+        background: 'var(--bg-surface)',
+        borderBottom: '1px solid var(--border)',
+      }}>
+        {/* Logo */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <Crosshair size={20} style={{ color: 'var(--accent)' }} />
+          <span style={{ fontWeight: 700, fontSize: 15, color: 'var(--text-1)', letterSpacing: '-0.3px' }}>
+            LeadHunter
+          </span>
         </div>
 
+        {/* Search */}
+        <div style={{ flex: 1, maxWidth: 380, marginLeft: 24, position: 'relative' }}>
+          <Search size={14} style={{
+            position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)',
+            color: 'var(--text-3)', pointerEvents: 'none',
+          }} />
+          <input
+            type="text"
+            placeholder="Buscar por nome ou telefone..."
+            value={filtros.busca}
+            onChange={e => aplicarFiltros({ ...filtros, busca: e.target.value })}
+            style={{
+              width: '100%', background: 'var(--bg-base)',
+              border: '1px solid var(--border)',
+              borderRadius: 'var(--radius-full)', padding: '7px 12px 7px 32px',
+              color: 'var(--text-1)', fontSize: 13, outline: 'none',
+              fontFamily: 'var(--font-body)', transition: 'border-color 0.15s ease',
+            }}
+            onFocus={e => e.target.style.borderColor = 'var(--border-hover)'}
+            onBlur={e => e.target.style.borderColor = 'var(--border)'}
+          />
+        </div>
+
+        {/* Status */}
+        <div style={{ marginLeft: 'auto' }}>
+          {loading ? (
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: 5,
+              padding: '4px 10px', borderRadius: 'var(--radius-full)',
+              fontSize: 11, color: 'var(--amber)', fontWeight: 500,
+            }}>
+              <Loader2 size={12} style={{ animation: 'spin 0.8s linear infinite' }} />
+              Carregando
+            </div>
+          ) : (
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: 5,
+              padding: '4px 10px', borderRadius: 'var(--radius-full)',
+              fontSize: 11, color: 'var(--green)', fontWeight: 500,
+            }}>
+              <CheckCircle size={12} />
+              Online
+            </div>
+          )}
+        </div>
+      </header>
+
+      {/* ── Tabs + Filters (same line) ─────────── */}
+      <div style={{
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        padding: '0 32px',
+        background: 'var(--bg-surface)',
+        borderBottom: '1px solid var(--border)',
+        flexShrink: 0,
+      }}>
+        {/* Tabs (left) */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 0 }}>
+          {[
+            { id: 'leads', label: 'Leads', icon: Crosshair },
+            { id: 'disparos', label: 'Disparos', icon: Send, badge: selecionados.length || null },
+          ].map(a => {
+            const Icon = a.icon
+            return (
+              <button key={a.id} onClick={() => setAba(a.id)} style={{
+                padding: '11px 16px', background: 'none', border: 'none',
+                cursor: 'pointer', fontSize: 13, fontWeight: 600,
+                fontFamily: 'var(--font-body)',
+                color: aba === a.id ? 'var(--text-1)' : 'var(--text-3)',
+                borderBottom: aba === a.id ? '2px solid var(--accent)' : '2px solid transparent',
+                marginBottom: -1, transition: 'all 0.15s ease',
+                display: 'flex', alignItems: 'center', gap: 6,
+              }}
+                onMouseEnter={e => { if (aba !== a.id) e.currentTarget.style.color = 'var(--text-2)' }}
+                onMouseLeave={e => { if (aba !== a.id) e.currentTarget.style.color = 'var(--text-3)' }}
+              >
+                <Icon size={14} />
+                {a.label}
+                {a.badge && (
+                  <span style={{
+                    background: 'var(--accent)', color: '#fff',
+                    fontSize: 10, fontWeight: 700, fontFamily: 'var(--font-mono)',
+                    padding: '0px 5px', borderRadius: 'var(--radius-full)',
+                    lineHeight: '16px', minWidth: 16, textAlign: 'center',
+                  }}>{a.badge}</span>
+                )}
+              </button>
+            )
+          })}
+        </div>
+
+        {/* Filters (right) — only visible on Leads tab */}
+        {aba === 'leads' && (
+          <FilterBar filtros={filtros} onChange={aplicarFiltros} />
+        )}
+      </div>
+
+      {/* ── Content (with padding) ─────────────── */}
+      <main style={{
+        flex: 1, display: 'flex', flexDirection: 'column',
+        overflow: 'hidden', minWidth: 0,
+        padding: '0 32px',
+      }}>
         {aba === 'leads' && (
           <>
             <StatsBar stats={stats} total={total} loading={loading} />
+            <div style={{ paddingBottom: 12 }}>
+              <NovoLeadModal onLeadCreated={() => { buscarLeads(pagina, filtros); buscarStats() }} />
+            </div>
             <LeadsTable
               leads={leads}
               loading={loading}
@@ -163,6 +259,7 @@ export default function App() {
               onClearSelection={() => setSelecionados([])}
               onStatusChange={mudarStatus}
               onDelete={deletarLead}
+              onLeadUpdated={() => { buscarLeads(pagina, filtros); buscarStats() }}
             />
             <Pagination
               pagina={pagina}
@@ -178,9 +275,9 @@ export default function App() {
             selecionados={selecionados}
             onLimparSelecionados={() => setSelecionados([])}
             botApi={BOT_API}
+            onMensagemEnviada={() => { buscarLeads(pagina, filtros); buscarStats(); }}
           />
         )}
-
       </main>
     </div>
   )

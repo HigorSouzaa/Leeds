@@ -52,7 +52,7 @@ filaWpp.subscribe((evento, dados) => {
 })
 
 // ─── Banco ────────────────────────────────────────────────────
-mongoose.connect(process.env.MONGODB_URI)
+mongoose.connect(process.env.MONGODB_URI, { dbName: 'leads_db' })
   .then(async () => {
     console.log('[DB] MongoDB conectado')
     try {

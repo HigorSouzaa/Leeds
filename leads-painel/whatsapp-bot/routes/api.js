@@ -220,4 +220,41 @@ router.delete('/campanhas/:id', async (req, res) => {
   res.json({ ok: true })
 })
 
+router.post('/campanhas/:id/reiniciar', async (req, res) => {
+  const camp = await Campanha.findById(req.params.id)
+  if (!camp) return res.status(404).json({ erro: 'Campanha não encontrada' })
+
+  // Reseta todos os disparos
+  const disparosResetados = camp.disparos.map(d => ({
+    ...d.toObject(),
+    status: 'pendente',
+    erro: null,
+    enviadoEm: null
+  }))
+
+  await Campanha.findByIdAndUpdate(camp._id, {
+    status: 'rascunho',
+    totalEnviados: 0,
+    totalErros: 0,
+    iniciadoEm: null,
+    finalizadoEm: null,
+    disparos: disparosResetados
+  })
+
+  res.json({ ok: true, msg: 'Campanha reiniciada com sucesso.' })
+})
+
+router.put('/campanhas/:id', async (req, res) => {
+  const { nome, mensagem } = req.body
+  const camp = await Campanha.findById(req.params.id)
+  if (!camp) return res.status(404).json({ erro: 'Campanha não encontrada' })
+
+  if (camp.status === 'em_andamento') {
+    return res.status(400).json({ erro: 'Não é possível editar uma campanha em andamento.' })
+  }
+
+  await Campanha.findByIdAndUpdate(camp._id, { nome, mensagem })
+  res.json({ ok: true, msg: 'Campanha atualizada com sucesso.' })
+})
+
 module.exports = router

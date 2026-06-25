@@ -1,0 +1,15 @@
+{
+  "name": "leads-painel-monorepo",
+  "version": "2.0.0",
+  "private": true,
+  "description": "LeadHunter — Frontend + API + WhatsApp Bot",
+  "scripts": {
+    "dev": "concurrently -k -p \"{name}\" -c \"blue.bold,red.bold,green.bold\" \"npm:dev:site\" \"npm:dev:api\" \"npm:dev:bot\"",
+    "dev:site": "cd frontend && npm run dev",
+    "dev:api": "cd api && venv\\Scripts\\python -m uvicorn main:app --reload --port 8000",
+    "dev:bot": "cd whatsapp-bot && npm start"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2"
+  }
+}

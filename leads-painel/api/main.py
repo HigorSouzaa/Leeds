@@ -161,3 +161,50 @@ def listar_categorias():
 def listar_cidades():
     cidades = col.distinct("cidade")
     return [c for c in cidades if c]
+
+
+@app.post("/leads")
+def criar_lead(body: dict):
+    if not body.get("nome"):
+        raise HTTPException(400, "O campo 'nome' é obrigatório")
+
+    novo_lead = {
+        "nome": body.get("nome"),
+        "telefone": body.get("telefone", ""),
+        "site": body.get("site", ""),
+        "categoria": body.get("categoria", "Manual"),
+        "cidade": body.get("cidade", ""),
+        "status": body.get("status", "novo"),
+        "criado_em": datetime.utcnow(),
+        "atualizado_em": datetime.utcnow()
+    }
+    
+    result = col.insert_one(novo_lead)
+    novo_lead["_id"] = result.inserted_id
+    return serialize(novo_lead)
+
+
+@app.put("/leads/{lead_id}")
+def editar_lead(lead_id: str, body: dict):
+    if not body.get("nome"):
+        raise HTTPException(400, "O campo 'nome' é obrigatório")
+
+    update_data = {
+        "nome": body.get("nome"),
+        "telefone": body.get("telefone", ""),
+        "site": body.get("site", ""),
+        "categoria": body.get("categoria", ""),
+        "cidade": body.get("cidade", ""),
+        "atualizado_em": datetime.utcnow()
+    }
+    
+    result = col.update_one(
+        {"_id": ObjectId(lead_id)},
+        {"$set": update_data}
+    )
+    
+    if result.matched_count == 0:
+        raise HTTPException(404, "Lead não encontrado")
+    
+    return {"ok": True}
+
