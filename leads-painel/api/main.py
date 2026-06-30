@@ -208,3 +208,75 @@ def editar_lead(lead_id: str, body: dict):
     
     return {"ok": True}
 
+
+# ─── Scraper (Leads Bot) ─────────────────────────────────────────
+import subprocess
+import threading
+import sys
+
+scraper_process = None
+scraper_logs = []
+
+def reader_thread(process):
+    for line in iter(process.stdout.readline, b''):
+        decoded = line.decode('utf-8', errors='replace').rstrip()
+        scraper_logs.append(decoded)
+    process.stdout.close()
+
+@app.post("/scraper/start")
+def start_scraper(body: dict):
+    global scraper_process, scraper_logs
+    if scraper_process and scraper_process.poll() is None:
+        return {"ok": False, "erro": "Bot já está rodando!"}
+
+    termo = body.get("termo", "").strip()
+    cidade = body.get("cidade", "").strip()
+    qtd = str(body.get("qtd", 100))
+
+    if not termo:
+        raise HTTPException(400, "O campo 'termo' é obrigatório")
+
+    scraper_logs = [f"🚀 Iniciando bot: Busca por '{termo}', Cidade: '{cidade}', Meta: {qtd} leads..."]
+
+    try:
+        # Pega a pasta d:\Dev\Leads (3 níveis acima de api/main.py)
+        base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        bot_dir = os.path.join(base_dir, "leads-bot")
+        bot_script = os.path.join(bot_dir, "main.py")
+        
+        # Usa o Python do venv do bot, se existir
+        bot_python = os.path.join(bot_dir, "venv", "Scripts", "python.exe")
+        if not os.path.exists(bot_python):
+            bot_python = "python"
+        
+        args = [bot_python, bot_script, termo, cidade, qtd]
+        
+        scraper_process = subprocess.Popen(
+            args,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            cwd=bot_dir
+        )
+        
+        t = threading.Thread(target=reader_thread, args=(scraper_process,), daemon=True)
+        t.start()
+        
+        return {"ok": True, "msg": "Bot iniciado com sucesso."}
+    except Exception as e:
+        scraper_logs.append(f"❌ Erro ao iniciar: {e}")
+        return {"ok": False, "erro": str(e)}
+
+@app.get("/scraper/logs")
+def get_scraper_logs():
+    running = scraper_process is not None and scraper_process.poll() is None
+    return {"logs": scraper_logs, "running": running}
+
+@app.post("/scraper/stop")
+def stop_scraper():
+    global scraper_process
+    if scraper_process and scraper_process.poll() is None:
+        scraper_process.terminate()
+        scraper_logs.append("🛑 Bot forçado a parar pelo usuário.")
+        return {"ok": True, "msg": "Bot parado."}
+    return {"ok": False, "msg": "Bot não estava rodando."}
+

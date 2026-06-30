@@ -1,12 +1,13 @@
 // src/App.jsx
 import { useState, useEffect, useCallback } from 'react'
 import axios from 'axios'
-import { Crosshair, Search, Send, Loader2, CheckCircle } from 'lucide-react'
+import { Crosshair, Search, Send, Loader2, CheckCircle, Bot } from 'lucide-react'
 import FilterBar from './components/FilterBar.jsx'
 import StatsBar from './components/StatsBar.jsx'
 import LeadsTable from './components/LeadsTable.jsx'
 import Pagination from './components/Pagination.jsx'
 import DisparosTab from './components/DisparosTab.jsx'
+import ScraperTab from './components/ScraperTab.jsx'
 import NovoLeadModal from './components/NovoLeadModal.jsx'
 
 const API = '/api'
@@ -199,6 +200,7 @@ export default function App() {
         <div style={{ display: 'flex', alignItems: 'center', gap: 0 }}>
           {[
             { id: 'leads', label: 'Leads', icon: Crosshair },
+            { id: 'extrator', label: 'Extrator', icon: Bot },
             { id: 'disparos', label: 'Disparos', icon: Send, badge: selecionados.length || null },
           ].map(a => {
             const Icon = a.icon
@@ -268,6 +270,13 @@ export default function App() {
               onChange={(p) => buscarLeads(p, filtros)}
             />
           </>
+        )}
+
+        {aba === 'extrator' && (
+          <ScraperTab
+            api={API}
+            onScraperFinish={() => { buscarLeads(1, filtros); buscarStats(); }}
+          />
         )}
 
         {aba === 'disparos' && (

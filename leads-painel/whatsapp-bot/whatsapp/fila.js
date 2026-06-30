@@ -64,9 +64,16 @@ function formatarNumero(telefone) {
   return `${nums}@c.us`
 }
 
+// Callback que será chamado quando a fila for interrompida (limite, desconexão, etc.)
+// O api.js registra este callback para atualizar o status da campanha no MongoDB
+let onFilaInterrompida = null
+function setOnFilaInterrompida(fn) { onFilaInterrompida = fn }
+
 async function processarFila() {
   if (processando || fila.length === 0) return
   processando = true
+
+  let motivoParada = null
 
   while (fila.length > 0) {
     resetarContadorDiario()
@@ -74,6 +81,10 @@ async function processarFila() {
     if (enviadosHoje >= LIMITE_DIARIO) {
       console.log(`[FILA] ⛔ Limite diário de ${LIMITE_DIARIO} mensagens atingido. Retomando amanhã.`)
       notificar('limite_diario', { enviados: enviadosHoje, limite: LIMITE_DIARIO })
+      motivoParada = 'limite_diario'
+      // Limpa a fila mas NÃO perde o progresso — os disparos já enviados
+      // foram marcados como 'enviado' no MongoDB em tempo real (onSucesso).
+      // Os que sobraram continuam como 'pendente' no banco.
       fila = []
       break
     }
@@ -92,6 +103,7 @@ async function processarFila() {
     if (!cliente) {
       console.log('[FILA] ⚠️ Cliente desconectado. Abortando fila.')
       item.onErro?.('Cliente WhatsApp desconectado')
+      motivoParada = 'desconectado'
       fila = []
       break
     }
@@ -127,6 +139,13 @@ async function processarFila() {
   }
 
   processando = false
+
+  // Se parou por motivo externo (limite/desconexão), avisa para atualizar o status da campanha
+  if (motivoParada && onFilaInterrompida) {
+    console.log(`[FILA] 🔄 Fila interrompida por: ${motivoParada}`)
+    onFilaInterrompida(motivoParada)
+  }
+
   console.log('[FILA] 🏁 Fila finalizada.')
   notificar('fila_finalizada', { enviadosHoje })
 }
@@ -173,4 +192,4 @@ function setConfig(newCfg) {
   DELAY_MAX = DELAY_MAX_SEGUNDOS * 1000;
 }
 
-module.exports = { adicionarNaFila, limparFila, getStatus, subscribe, getConfig, setConfig }
+module.exports = { adicionarNaFila, limparFila, getStatus, subscribe, getConfig, setConfig, setOnFilaInterrompida }

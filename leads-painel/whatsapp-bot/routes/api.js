@@ -7,6 +7,48 @@ const Config = require('../models/config')
 const wppClient = require('../whatsapp/client')
 const fila = require('../whatsapp/fila')
 
+// ─── Rastrear campanha ativa (para recuperação) ──────────────
+let campanhaAtivaId = null
+
+// Quando a fila é interrompida (limite diário, desconexão, etc.),
+// automaticamente atualiza o status da campanha para 'pausada'
+// assim ela pode ser retomada depois sem perder progresso.
+fila.setOnFilaInterrompida(async (motivo) => {
+  if (!campanhaAtivaId) return
+  console.log(`[CAMPANHA] Fila interrompida (${motivo}). Pausando campanha ${campanhaAtivaId}...`)
+  try {
+    await Campanha.findByIdAndUpdate(campanhaAtivaId, { status: 'pausada' })
+    console.log(`[CAMPANHA] ✅ Campanha ${campanhaAtivaId} marcada como pausada. Pode ser retomada.`)
+  } catch (err) {
+    console.error('[CAMPANHA] Erro ao pausar campanha após interrupção:', err)
+  }
+  campanhaAtivaId = null
+})
+
+// ─── Recuperação de campanhas travadas ───────────────────────
+// Se o servidor crashou enquanto uma campanha estava rodando,
+// ela fica presa como 'em_andamento'. Ao reiniciar, mudamos para 'pausada'.
+async function recuperarCampanhasTravadas() {
+  try {
+    const travadas = await Campanha.find({ status: 'em_andamento' })
+    for (const camp of travadas) {
+      console.log(`[RECUPERAÇÃO] Campanha "${camp.nome}" estava em_andamento. Movendo para pausada...`)
+      await Campanha.findByIdAndUpdate(camp._id, { status: 'pausada' })
+      console.log(`[RECUPERAÇÃO] ✅ "${camp.nome}" → pausada (${camp.totalEnviados}/${camp.totalLeads} já enviados, pode retomar)`)
+    }
+    if (travadas.length > 0) {
+      console.log(`[RECUPERAÇÃO] ${travadas.length} campanha(s) recuperada(s) com sucesso!`)
+    }
+  } catch (err) {
+    console.error('[RECUPERAÇÃO] Erro ao recuperar campanhas:', err)
+  }
+}
+
+// Chamar na inicialização (após conexão com MongoDB)
+mongoose.connection.once('open', () => {
+  recuperarCampanhasTravadas()
+})
+
 // ─── WhatsApp status ───────────────────────────────────────────
 
 router.get('/wpp/status', (req, res) => {
@@ -143,6 +185,9 @@ router.post('/campanhas/:id/iniciar', async (req, res) => {
     return res.status(400).json({ erro: 'Nenhum disparo pendente.' })
   }
 
+  // Salva referência da campanha ativa para recuperação
+  campanhaAtivaId = camp._id.toString()
+
   await Campanha.findByIdAndUpdate(camp._id, {
     status: 'em_andamento',
     iniciadoEm: new Date(),
@@ -210,6 +255,7 @@ router.post('/campanhas/:id/iniciar', async (req, res) => {
 })
 
 router.post('/campanhas/:id/pausar', async (req, res) => {
+  campanhaAtivaId = null  // Limpa referência da campanha ativa
   fila.limparFila()
   await Campanha.findByIdAndUpdate(req.params.id, { status: 'pausada' })
   res.json({ ok: true })

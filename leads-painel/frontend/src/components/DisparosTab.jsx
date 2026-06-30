@@ -360,6 +360,10 @@ export default function DisparosTab({ selecionados, onLimparSelecionados, botApi
                 <div><Label>Pausa a cada</Label><input type="number" style={inputStyle} value={botConfig.PAUSA_A_CADA} onChange={e => setBotConfig({ ...botConfig, PAUSA_A_CADA: Number(e.target.value) })} /></div>
                 <div><Label>Pausa (min)</Label><input type="number" style={inputStyle} value={botConfig.PAUSA_MINUTOS} onChange={e => setBotConfig({ ...botConfig, PAUSA_MINUTOS: Number(e.target.value) })} /></div>
               </div>
+              <div style={{ marginBottom: 12 }}>
+                <Label>Limite Diário (Mensagens/Dia)</Label>
+                <input type="number" style={inputStyle} value={botConfig.LIMITE_DIARIO} onChange={e => setBotConfig({ ...botConfig, LIMITE_DIARIO: Number(e.target.value) })} />
+              </div>
               <Btn cor="ghost" onClick={salvarConfig} full>Salvar configurações</Btn>
             </Card>
           )}
@@ -469,7 +473,7 @@ export default function DisparosTab({ selecionados, onLimparSelecionados, botApi
                   <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                     {(camp.status === 'rascunho' || camp.status === 'pausada') && (
                       <Btn cor="green" icon={Play} onClick={() => iniciarCampanha(camp._id)} disabled={estado !== 'conectado'}>
-                        {camp.status === 'pausada' ? 'Retomar' : 'Iniciar'}
+                        {camp.status === 'pausada' ? `Retomar (${camp.totalLeads - camp.totalEnviados - camp.totalErros} restantes)` : 'Iniciar'}
                       </Btn>
                     )}
                     {selecionados.length > 0 && (camp.status === 'rascunho' || camp.status === 'pausada' || camp.status === 'finalizada') && (
