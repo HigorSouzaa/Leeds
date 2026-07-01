@@ -60,12 +60,21 @@ function criarCliente() {
     notificar('pronto', { estado: 'conectado' })
   })
 
-  client.on('disconnected', (reason) => {
+  client.on('disconnected', async (reason) => {
     estadoAtual = 'desconectado'
     qrBase64 = null
-    clienteWpp = null
     console.log('[WPP] Desconectado:', reason)
     notificar('desconectado', { estado: 'desconectado', reason })
+    
+    // Tenta destruir o cliente antigo sem crashar
+    try {
+      if (clienteWpp) {
+        await clienteWpp.destroy().catch(() => {})
+      }
+    } catch (e) {
+      console.log('[WPP] Erro ao destruir cliente (ignorado):', e.message)
+    }
+    clienteWpp = null
   })
 
   client.on('auth_failure', (msg) => {
@@ -86,7 +95,11 @@ async function iniciar() {
 
 async function desconectar() {
   if (!clienteWpp) return
-  await clienteWpp.destroy()
+  try {
+    await clienteWpp.destroy()
+  } catch (e) {
+    console.log('[WPP] Erro ao destruir cliente (ignorado):', e.message)
+  }
   clienteWpp = null
   estadoAtual = 'desconectado'
   qrBase64 = null

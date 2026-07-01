@@ -4,80 +4,99 @@ const router = express.Router()
 const mongoose = require('mongoose')
 const Campanha = require('../models/campanha')
 const Config = require('../models/config')
-const wppClient = require('../whatsapp/client')
+const Chip = require('../models/chip')
+const gerenciadorChips = require('../whatsapp/gerenciadorChips')
 const fila = require('../whatsapp/fila')
 
 // ─── Rastrear campanha ativa (para recuperação) ──────────────
 let campanhaAtivaId = null
 
-// Quando a fila é interrompida (limite diário, desconexão, etc.),
-// automaticamente atualiza o status da campanha para 'pausada'
-// assim ela pode ser retomada depois sem perder progresso.
+// Quando a fila é interrompida, atualiza campanha para 'pausada'
 fila.setOnFilaInterrompida(async (motivo) => {
   if (!campanhaAtivaId) return
   console.log(`[CAMPANHA] Fila interrompida (${motivo}). Pausando campanha ${campanhaAtivaId}...`)
   try {
     await Campanha.findByIdAndUpdate(campanhaAtivaId, { status: 'pausada' })
-    console.log(`[CAMPANHA] ✅ Campanha ${campanhaAtivaId} marcada como pausada. Pode ser retomada.`)
+    console.log(`[CAMPANHA] ✅ Campanha pausada. Pode ser retomada.`)
   } catch (err) {
-    console.error('[CAMPANHA] Erro ao pausar campanha após interrupção:', err)
+    console.error('[CAMPANHA] Erro ao pausar campanha:', err)
   }
   campanhaAtivaId = null
 })
 
-// ─── Recuperação de campanhas travadas ───────────────────────
-// Se o servidor crashou enquanto uma campanha estava rodando,
-// ela fica presa como 'em_andamento'. Ao reiniciar, mudamos para 'pausada'.
+// Recuperação de campanhas travadas ao reiniciar
 async function recuperarCampanhasTravadas() {
   try {
     const travadas = await Campanha.find({ status: 'em_andamento' })
     for (const camp of travadas) {
-      console.log(`[RECUPERAÇÃO] Campanha "${camp.nome}" estava em_andamento. Movendo para pausada...`)
+      console.log(`[RECUPERAÇÃO] Campanha "${camp.nome}" estava em_andamento → pausada`)
       await Campanha.findByIdAndUpdate(camp._id, { status: 'pausada' })
-      console.log(`[RECUPERAÇÃO] ✅ "${camp.nome}" → pausada (${camp.totalEnviados}/${camp.totalLeads} já enviados, pode retomar)`)
     }
     if (travadas.length > 0) {
-      console.log(`[RECUPERAÇÃO] ${travadas.length} campanha(s) recuperada(s) com sucesso!`)
+      console.log(`[RECUPERAÇÃO] ${travadas.length} campanha(s) recuperada(s)!`)
     }
   } catch (err) {
-    console.error('[RECUPERAÇÃO] Erro ao recuperar campanhas:', err)
+    console.error('[RECUPERAÇÃO] Erro:', err)
   }
 }
+mongoose.connection.once('open', () => { recuperarCampanhasTravadas() })
 
-// Chamar na inicialização (após conexão com MongoDB)
-mongoose.connection.once('open', () => {
-  recuperarCampanhasTravadas()
-})
-
-// ─── WhatsApp status ───────────────────────────────────────────
+// ─── Status geral ────────────────────────────────────────────
 
 router.get('/wpp/status', (req, res) => {
-  const { estado, qrBase64 } = wppClient.getEstado()
-  const filaStatus = fila.getStatus()
-  res.json({ estado, qrBase64, fila: filaStatus })
+  res.json({
+    chips: gerenciadorChips.getStatusTodos(),
+    totalConectados: gerenciadorChips.getTotalConectados(),
+    fila: fila.getStatus(),
+  })
 })
 
-router.post('/wpp/iniciar', (req, res) => {
+// ─── Gerenciamento de chips ──────────────────────────────────
+
+router.get('/chips', async (req, res) => {
+  const status = gerenciadorChips.getStatusTodos()
+  res.json(status)
+})
+
+router.post('/chips', async (req, res) => {
+  const { apelido } = req.body
+  // Gera um ID único para o chip
+  const chipId = `chip_${Date.now()}`
   try {
-    // Não faz await — initialize() demora (abre Puppeteer).
-    // O QR code chegará via SSE quando estiver pronto.
-    wppClient.iniciar().catch(err => {
-      console.error('[WPP] Erro ao iniciar:', err.message)
+    // Salva no banco para recarregar automaticamente
+    await Chip.create({ chipId, apelido: apelido || `Chip ${chipId}` })
+    // Inicia a sessão (não faz await — pode demorar)
+    gerenciadorChips.adicionarChip(chipId, apelido || `Chip ${chipId}`).catch(err => {
+      console.error(`[CHIP] Erro ao adicionar chip ${chipId}:`, err.message)
     })
-    res.json({ ok: true, msg: 'Iniciando... aguarde o QR code.' })
+    res.json({ ok: true, chipId, msg: 'Chip adicionado. Aguarde o QR code.' })
   } catch (err) {
     res.status(500).json({ ok: false, erro: err.message })
   }
 })
 
-router.post('/wpp/desconectar', async (req, res) => {
+router.delete('/chips/:chipId', async (req, res) => {
   try {
-    await wppClient.desconectar()
+    await gerenciadorChips.removerChip(req.params.chipId)
+    await Chip.deleteOne({ chipId: req.params.chipId })
     res.json({ ok: true })
   } catch (err) {
     res.status(500).json({ ok: false, erro: err.message })
   }
 })
+
+router.post('/chips/:chipId/reconectar', async (req, res) => {
+  try {
+    gerenciadorChips.reconectarChip(req.params.chipId).catch(err => {
+      console.error(`[CHIP] Erro ao reconectar ${req.params.chipId}:`, err.message)
+    })
+    res.json({ ok: true, msg: 'Reconectando... aguarde o QR code.' })
+  } catch (err) {
+    res.status(500).json({ ok: false, erro: err.message })
+  }
+})
+
+// ─── Config do robô ──────────────────────────────────────────
 
 router.get('/wpp/config', (req, res) => {
   res.json(fila.getConfig())
@@ -87,18 +106,16 @@ router.post('/wpp/config', async (req, res) => {
   try {
     let config = await Config.findById('global')
     if (!config) config = new Config({ _id: 'global' })
-    
     if (req.body.DELAY_MIN_SEGUNDOS !== undefined) config.DELAY_MIN_SEGUNDOS = req.body.DELAY_MIN_SEGUNDOS
     if (req.body.DELAY_MAX_SEGUNDOS !== undefined) config.DELAY_MAX_SEGUNDOS = req.body.DELAY_MAX_SEGUNDOS
     if (req.body.LIMITE_DIARIO !== undefined) config.LIMITE_DIARIO = req.body.LIMITE_DIARIO
     if (req.body.PAUSA_A_CADA !== undefined) config.PAUSA_A_CADA = req.body.PAUSA_A_CADA
     if (req.body.PAUSA_MINUTOS !== undefined) config.PAUSA_MINUTOS = req.body.PAUSA_MINUTOS
-    
     await config.save()
     fila.setConfig(config)
     res.json({ ok: true, config: fila.getConfig() })
   } catch (err) {
-    res.status(500).json({ erro: 'Erro ao salvar configurações no MongoDB' })
+    res.status(500).json({ erro: 'Erro ao salvar configurações' })
   }
 })
 
@@ -111,53 +128,33 @@ router.get('/campanhas', async (req, res) => {
 
 router.post('/campanhas', async (req, res) => {
   const { nome, mensagem, leads } = req.body
-
   if (!nome || !mensagem) {
     return res.status(400).json({ erro: 'nome e mensagem são obrigatórios' })
   }
-
   const disparos = (leads || []).map(lead => ({
     leadId:   lead.id || lead._id,
     nome:     lead.nome,
     telefone: lead.telefone,
     status:   'pendente',
   }))
-
-  const campanha = await Campanha.create({
-    nome,
-    mensagem,
-    disparos,
-    totalLeads: disparos.length,
-  })
-
+  const campanha = await Campanha.create({ nome, mensagem, disparos, totalLeads: disparos.length })
   res.status(201).json(campanha)
 })
 
 router.post('/campanhas/:id/leads', async (req, res) => {
   const { leads } = req.body
   if (!leads || !leads.length) return res.status(400).json({ erro: 'Nenhum lead fornecido.' })
-
   const camp = await Campanha.findById(req.params.id)
   if (!camp) return res.status(404).json({ erro: 'Campanha não encontrada.' })
-
   const existentes = new Set(camp.disparos.map(d => d.leadId))
   const novos = leads.filter(l => !existentes.has(l.id || l._id))
-
-  if (!novos.length) return res.json({ ok: true, adicionados: 0, msg: 'Todos os leads já estavam na campanha.' })
-
-  const novosDisparos = novos.map(lead => ({
-    leadId:   lead.id || lead._id,
-    nome:     lead.nome,
-    telefone: lead.telefone,
-    status:   'pendente',
-  }))
-
+  if (!novos.length) return res.json({ ok: true, adicionados: 0, msg: 'Todos já estavam na campanha.' })
+  const novosDisparos = novos.map(lead => ({ leadId: lead.id || lead._id, nome: lead.nome, telefone: lead.telefone, status: 'pendente' }))
   await Campanha.findByIdAndUpdate(camp._id, {
     $push: { disparos: { $each: novosDisparos } },
-    $inc:  { totalLeads: novosDisparos.length }
+    $inc: { totalLeads: novosDisparos.length },
   })
-
-  res.json({ ok: true, adicionados: novosDisparos.length, msg: `${novosDisparos.length} leads adicionados à campanha.` })
+  res.json({ ok: true, adicionados: novosDisparos.length, msg: `${novosDisparos.length} leads adicionados.` })
 })
 
 router.get('/campanhas/:id', async (req, res) => {
@@ -170,28 +167,20 @@ router.post('/campanhas/:id/iniciar', async (req, res) => {
   const camp = await Campanha.findById(req.params.id)
   if (!camp) return res.status(404).json({ erro: 'Campanha não encontrada' })
 
-  const { estado } = wppClient.getEstado()
-  if (estado !== 'conectado') {
-    return res.status(400).json({ erro: 'WhatsApp não está conectado. Conecte primeiro.' })
+  if (gerenciadorChips.getTotalConectados() === 0) {
+    return res.status(400).json({ erro: 'Nenhum chip WhatsApp conectado. Adicione e conecte um chip primeiro.' })
   }
-
   if (camp.status === 'em_andamento') {
     return res.status(400).json({ erro: 'Campanha já está em andamento.' })
   }
 
-  // Só envia os pendentes (permite retomar campanhas pausadas)
   const pendentes = camp.disparos.filter(d => d.status === 'pendente')
   if (!pendentes.length) {
     return res.status(400).json({ erro: 'Nenhum disparo pendente.' })
   }
 
-  // Salva referência da campanha ativa para recuperação
   campanhaAtivaId = camp._id.toString()
-
-  await Campanha.findByIdAndUpdate(camp._id, {
-    status: 'em_andamento',
-    iniciadoEm: new Date(),
-  })
+  await Campanha.findByIdAndUpdate(camp._id, { status: 'em_andamento', iniciadoEm: new Date() })
 
   const itens = pendentes.map(d => ({
     telefone: d.telefone,
@@ -201,32 +190,24 @@ router.post('/campanhas/:id/iniciar', async (req, res) => {
     onSucesso: async () => {
       await Campanha.findOneAndUpdate(
         { _id: camp._id, 'disparos._id': d._id },
-        {
-          $set: { 'disparos.$.status': 'enviado', 'disparos.$.enviadoEm': new Date() },
-          $inc: { totalEnviados: 1 },
-        }
+        { $set: { 'disparos.$.status': 'enviado', 'disparos.$.enviadoEm': new Date() }, $inc: { totalEnviados: 1 } }
       )
-      
-      // Atualizar o status do lead na collection principal
       try {
-        const db = mongoose.connection.db;
+        const db = mongoose.connection.db
         if (db && d.leadId) {
-          const { ObjectId } = mongoose.Types;
+          const { ObjectId } = mongoose.Types
           await db.collection('leads').updateOne(
             { _id: new ObjectId(d.leadId) },
             { $set: { status: 'contatado', atualizado_em: new Date() } }
-          );
+          )
         }
-      } catch (err) {
-        console.error('[MongoDB] Erro ao atualizar status do lead para contatado:', err);
-      }
-
-      // Verifica se finalizou
+      } catch (err) {}
       const atualizada = await Campanha.findById(camp._id)
       if (!atualizada) return
       const todosFeitos = atualizada.disparos.every(x => x.status !== 'pendente')
       if (todosFeitos) {
         await Campanha.findByIdAndUpdate(camp._id, { status: 'finalizada', finalizadoEm: new Date() })
+        campanhaAtivaId = null
       }
     },
 
@@ -234,18 +215,14 @@ router.post('/campanhas/:id/iniciar', async (req, res) => {
       const statusErro = msg?.includes('não registrado') ? 'sem_wpp' : 'erro'
       await Campanha.findOneAndUpdate(
         { _id: camp._id, 'disparos._id': d._id },
-        {
-          $set: { 'disparos.$.status': statusErro, 'disparos.$.erro': msg },
-          $inc: { totalErros: 1 },
-        }
+        { $set: { 'disparos.$.status': statusErro, 'disparos.$.erro': msg }, $inc: { totalErros: 1 } }
       )
-
-      // Verifica se finalizou
       const atualizada = await Campanha.findById(camp._id)
       if (!atualizada) return
       const todosFeitos = atualizada.disparos.every(x => x.status !== 'pendente')
       if (todosFeitos) {
         await Campanha.findByIdAndUpdate(camp._id, { status: 'finalizada', finalizadoEm: new Date() })
+        campanhaAtivaId = null
       }
     },
   }))
@@ -255,7 +232,7 @@ router.post('/campanhas/:id/iniciar', async (req, res) => {
 })
 
 router.post('/campanhas/:id/pausar', async (req, res) => {
-  campanhaAtivaId = null  // Limpa referência da campanha ativa
+  campanhaAtivaId = null
   fila.limparFila()
   await Campanha.findByIdAndUpdate(req.params.id, { status: 'pausada' })
   res.json({ ok: true })
@@ -269,24 +246,11 @@ router.delete('/campanhas/:id', async (req, res) => {
 router.post('/campanhas/:id/reiniciar', async (req, res) => {
   const camp = await Campanha.findById(req.params.id)
   if (!camp) return res.status(404).json({ erro: 'Campanha não encontrada' })
-
-  // Reseta todos os disparos
-  const disparosResetados = camp.disparos.map(d => ({
-    ...d.toObject(),
-    status: 'pendente',
-    erro: null,
-    enviadoEm: null
-  }))
-
+  const disparosResetados = camp.disparos.map(d => ({ ...d.toObject(), status: 'pendente', erro: null, enviadoEm: null }))
   await Campanha.findByIdAndUpdate(camp._id, {
-    status: 'rascunho',
-    totalEnviados: 0,
-    totalErros: 0,
-    iniciadoEm: null,
-    finalizadoEm: null,
-    disparos: disparosResetados
+    status: 'rascunho', totalEnviados: 0, totalErros: 0,
+    iniciadoEm: null, finalizadoEm: null, disparos: disparosResetados,
   })
-
   res.json({ ok: true, msg: 'Campanha reiniciada com sucesso.' })
 })
 
@@ -294,11 +258,9 @@ router.put('/campanhas/:id', async (req, res) => {
   const { nome, mensagem } = req.body
   const camp = await Campanha.findById(req.params.id)
   if (!camp) return res.status(404).json({ erro: 'Campanha não encontrada' })
-
   if (camp.status === 'em_andamento') {
     return res.status(400).json({ erro: 'Não é possível editar uma campanha em andamento.' })
   }
-
   await Campanha.findByIdAndUpdate(camp._id, { nome, mensagem })
   res.json({ ok: true, msg: 'Campanha atualizada com sucesso.' })
 })

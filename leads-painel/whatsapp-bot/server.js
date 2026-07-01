@@ -4,7 +4,7 @@ const express = require('express')
 const cors = require('cors')
 const mongoose = require('mongoose')
 const Config = require('./models/config')
-const wppClient = require('./whatsapp/client')
+const chips = require('./whatsapp/gerenciadorChips')
 const filaWpp = require('./whatsapp/fila')
 const apiRoutes = require('./routes/api')
 
@@ -18,8 +18,6 @@ console.log('[DEBUG] Limite JSON aumentado para 100MB')
 app.use('/api', apiRoutes)
 
 // ─── SSE — push de eventos em tempo real para o painel ────────
-// O painel faz uma conexão SSE e recebe updates sem precisar ficar
-// fazendo polling. Funciona tipo WebSocket mas mais simples.
 const sseClients = new Set()
 
 app.get('/events', (req, res) => {
@@ -31,9 +29,9 @@ app.get('/events', (req, res) => {
   res.flushHeaders()
 
   // Envia estado atual ao conectar
-  const estadoAtual = wppClient.getEstado()
+  const todosChips = chips.getStatusTodos()
   const filaAtual = filaWpp.getStatus()
-  res.write(`data: ${JSON.stringify({ tipo: 'estado_inicial', ...estadoAtual, fila: filaAtual })}\n\n`)
+  res.write(`data: ${JSON.stringify({ tipo: 'estado_inicial', chips: todosChips, fila: filaAtual })}` + '\n\n')
 
   sseClients.add(res)
   req.on('close', () => sseClients.delete(res))
@@ -44,8 +42,8 @@ function broadcast(tipo, dados) {
   sseClients.forEach(res => res.write(`data: ${payload}\n\n`))
 }
 
-// Escuta eventos do WhatsApp e repassa pro painel via SSE
-wppClient.subscribe((evento, dados) => {
+// Escuta eventos dos chips e repassa pro painel via SSE
+chips.subscribe((evento, dados) => {
   broadcast(evento, dados)
 })
 
@@ -64,6 +62,16 @@ mongoose.connect(process.env.MONGODB_URI, { dbName: 'leads_db' })
         console.log('[DB] Configuração padrão criada no MongoDB.')
       }
       filaWpp.setConfig(config)
+
+      // Carrega chips salvos no banco e inicializa automaticamente
+      const Chip = require('./models/chip')
+      const chipsSalvos = await Chip.find({})
+      for (const c of chipsSalvos) {
+        console.log(`[CHIP] Iniciando chip salvo: ${c.apelido} (${c.chipId})`)
+        chips.adicionarChip(c.chipId, c.apelido).catch(err => {
+          console.error(`[CHIP] Erro ao iniciar chip ${c.chipId}:`, err.message)
+        })
+      }
     } catch(e) {
       console.error('[DB] Erro ao carregar configurações:', e)
     }

@@ -1,28 +1,29 @@
 // src/App.jsx
 import { useState, useEffect, useCallback } from 'react'
 import axios from 'axios'
-import { Crosshair, Search, Send, Loader2, CheckCircle, Bot } from 'lucide-react'
+import { Crosshair, Search, Send, Loader2, CheckCircle, Bot, Users } from 'lucide-react'
 import FilterBar from './components/FilterBar.jsx'
 import StatsBar from './components/StatsBar.jsx'
 import LeadsTable from './components/LeadsTable.jsx'
 import Pagination from './components/Pagination.jsx'
 import DisparosTab from './components/DisparosTab.jsx'
 import ScraperTab from './components/ScraperTab.jsx'
+import ClientesTab from './components/ClientesTab.jsx'
 import NovoLeadModal from './components/NovoLeadModal.jsx'
 
 const API = '/api'
 const BOT_API = 'http://localhost:3001/api'
 
 export default function App() {
-  const [aba, setAba]             = useState('leads')
-  const [leads, setLeads]         = useState([])
-  const [stats, setStats]         = useState(null)
-  const [total, setTotal]         = useState(0)
-  const [pagina, setPagina]       = useState(1)
-  const [totalPag, setTotalPag]   = useState(1)
-  const [loading, setLoading]     = useState(false)
+  const [aba, setAba] = useState('leads')
+  const [leads, setLeads] = useState([])
+  const [stats, setStats] = useState(null)
+  const [total, setTotal] = useState(0)
+  const [pagina, setPagina] = useState(1)
+  const [totalPag, setTotalPag] = useState(1)
+  const [loading, setLoading] = useState(false)
   const [selecionados, setSelecionados] = useState([])
-  const [filtros, setFiltros]     = useState({
+  const [filtros, setFiltros] = useState({
     busca: '', categoria: '', cidade: '', status: '',
     tem_telefone: '', tem_site: ''
   })
@@ -31,12 +32,12 @@ export default function App() {
     setLoading(true)
     try {
       const params = { pagina: pag, por_pagina: 20 }
-      if (f.busca)       params.busca = f.busca
-      if (f.categoria)   params.categoria = f.categoria
-      if (f.cidade)      params.cidade = f.cidade
-      if (f.status)      params.status = f.status
+      if (f.busca) params.busca = f.busca
+      if (f.categoria) params.categoria = f.categoria
+      if (f.cidade) params.cidade = f.cidade
+      if (f.status) params.status = f.status
       if (f.tem_telefone !== '') params.tem_telefone = f.tem_telefone === 'sim'
-      if (f.tem_site !== '')     params.tem_site = f.tem_site === 'sim'
+      if (f.tem_site !== '') params.tem_site = f.tem_site === 'sim'
 
       const res = await axios.get(`${API}/leads`, { params })
       setLeads(res.data.leads)
@@ -102,16 +103,16 @@ export default function App() {
     setLoading(true)
     try {
       const params = { pagina: 1, por_pagina: 10000 }
-      if (filtros.busca)       params.busca = filtros.busca
-      if (filtros.categoria)   params.categoria = filtros.categoria
-      if (filtros.cidade)      params.cidade = filtros.cidade
-      if (filtros.status)      params.status = filtros.status
+      if (filtros.busca) params.busca = filtros.busca
+      if (filtros.categoria) params.categoria = filtros.categoria
+      if (filtros.cidade) params.cidade = filtros.cidade
+      if (filtros.status) params.status = filtros.status
       if (filtros.tem_telefone !== '') params.tem_telefone = filtros.tem_telefone === 'sim'
-      if (filtros.tem_site !== '')     params.tem_site = filtros.tem_site === 'sim'
+      if (filtros.tem_site !== '') params.tem_site = filtros.tem_site === 'sim'
 
       const res = await axios.get(`${API}/leads`, { params })
       const comTelefone = res.data.leads.filter(l => l.telefone)
-      
+
       setSelecionados(prev => {
         const novos = comTelefone.filter(l => !prev.find(s => s.id === l.id))
         return [...prev, ...novos]
@@ -129,7 +130,7 @@ export default function App() {
       {/* ── Header ─────────────────────────────── */}
       <header style={{
         display: 'flex', alignItems: 'center', gap: 14,
-        padding: '0 32px', height: 52, flexShrink: 0,
+        padding: '30px 64px', height: 52, flexShrink: 0,
         background: 'var(--bg-surface)',
         borderBottom: '1px solid var(--border)',
       }}>
@@ -191,7 +192,7 @@ export default function App() {
       {/* ── Tabs + Filters (same line) ─────────── */}
       <div style={{
         display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-        padding: '0 32px',
+        padding: '5px 64px',
         background: 'var(--bg-surface)',
         borderBottom: '1px solid var(--border)',
         flexShrink: 0,
@@ -202,6 +203,7 @@ export default function App() {
             { id: 'leads', label: 'Leads', icon: Crosshair },
             { id: 'extrator', label: 'Extrator', icon: Bot },
             { id: 'disparos', label: 'Disparos', icon: Send, badge: selecionados.length || null },
+            { id: 'clientes', label: 'Clientes', icon: Users, badge: leads.filter(l => l.status === 'qualificado').length || null },
           ].map(a => {
             const Icon = a.icon
             return (
@@ -242,7 +244,7 @@ export default function App() {
       <main style={{
         flex: 1, display: 'flex', flexDirection: 'column',
         overflow: 'hidden', minWidth: 0,
-        padding: '0 32px',
+        padding: '0 64px',
       }}>
         {aba === 'leads' && (
           <>
@@ -285,6 +287,11 @@ export default function App() {
             onLimparSelecionados={() => setSelecionados([])}
             botApi={BOT_API}
             onMensagemEnviada={() => { buscarLeads(pagina, filtros); buscarStats(); }}
+          />
+        )}
+        {aba === 'clientes' && (
+          <ClientesTab
+            qualificados={leads.filter(l => l.status === 'qualificado')}
           />
         )}
       </main>

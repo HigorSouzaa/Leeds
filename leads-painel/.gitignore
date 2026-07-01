@@ -1,0 +1,32 @@
+# Node
+node_modules/
+npm-debug.log*
+
+# Vite
+frontend/dist/
+
+# Python
+api/venv/
+api/__pycache__/
+api/uploads/
+*.pyc
+
+# WhatsApp Bot Sessions (Chrome/Puppeteer data)
+whatsapp-bot/.wpp_session/
+whatsapp-bot/.wpp_session_*/
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE
+.vscode/
+.idea/
+
+# Env
+.env
+!.env.example
+
+# Logs
+*.log

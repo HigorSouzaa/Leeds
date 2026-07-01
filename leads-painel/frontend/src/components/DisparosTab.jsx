@@ -106,13 +106,16 @@ function Btn({ cor = 'ghost', disabled, onClick, children, full, icon: Icon }) {
 }
 
 export default function DisparosTab({ selecionados, onLimparSelecionados, botApi, onMensagemEnviada }) {
-  const [wppStatus, setWppStatus]     = useState({ estado: 'desconectado', qrBase64: null, fila: null })
+  const [chips, setChips]             = useState([])
+  const [filaStatus, setFilaStatus]   = useState(null)
+  const [botOffline, setBotOffline]   = useState(false)
   const [campanhas, setCampanhas]     = useState([])
   const [botConfig, setBotConfig]     = useState(null)
   const [nomeCamp, setNomeCamp]       = useState('')
   const [mensagem, setMensagem]       = useState('Olá {nome}! Tudo bem? Me chamo [SEU NOME] e gostaria de apresentar nossos serviços. {encerramento}')
   const [criando, setCriando]         = useState(false)
   const [feedback, setFeedback]       = useState(null)
+  const [apelidoNovoChip, setApelidoNovoChip] = useState('')
   const eventRef                      = useRef(null)
 
   useEffect(() => {
@@ -121,30 +124,39 @@ export default function DisparosTab({ selecionados, onLimparSelecionados, botApi
 
     es.onmessage = (e) => {
       const dados = JSON.parse(e.data)
-      if (dados.tipo === 'estado_inicial' || dados.tipo === 'pronto' || dados.tipo === 'qr' || dados.tipo === 'desconectado' || dados.tipo === 'autenticado') {
-        setWppStatus(prev => ({ ...prev, estado: dados.estado ?? prev.estado, qrBase64: dados.qrBase64 ?? null, fila: dados.fila ?? prev.fila }))
+
+      // ─── Estado inicial ───
+      if (dados.tipo === 'estado_inicial') {
+        setChips(dados.chips || [])
+        setFilaStatus(dados.fila)
       }
-      if (dados.tipo === 'enviado' || dados.tipo === 'fila_atualizada' || dados.tipo === 'fila_finalizada') {
-        setWppStatus(prev => ({ ...prev, fila: { ...prev.fila, ...dados } }))
+
+      // ─── Eventos de chips ───
+      if (['chip_qr', 'chip_pronto', 'chip_desconectado', 'chip_reconectando', 'chip_adicionado', 'chip_removido'].includes(dados.tipo)) {
+        // Recarrega a lista de chips do servidor
+        axios.get(`${botApi}/chips`).then(r => setChips(r.data)).catch(() => {})
+        if (dados.tipo === 'chip_pronto') mostrarFeedback(`Chip "${dados.chipId}" conectado!`, 'green')
+        if (dados.tipo === 'chip_desconectado') mostrarFeedback(`Chip "${dados.chipId}" desconectado.`, 'amber')
+      }
+
+      // ─── Fila ───
+      if (['enviado', 'fila_atualizada', 'fila_finalizada'].includes(dados.tipo)) {
+        setFilaStatus(prev => ({ ...prev, ...dados }))
         buscarCampanhas()
-        if (dados.tipo === 'enviado' && typeof onMensagemEnviada === 'function') {
-          onMensagemEnviada()
-        }
+        if (dados.tipo === 'enviado' && typeof onMensagemEnviada === 'function') onMensagemEnviada()
       }
-      if (dados.tipo === 'pronto') {
-        setWppStatus({ estado: 'conectado', qrBase64: null, fila: null })
-        mostrarFeedback('WhatsApp conectado com sucesso!', 'green')
-      }
-      if (dados.tipo === 'desconectado') {
-        setWppStatus({ estado: 'desconectado', qrBase64: null, fila: null })
-      }
+
+      // ─── Alertas ───
+      if (dados.tipo === 'possivel_ban') { mostrarFeedback('🚨 Possível restrição! Envios pausados por segurança.', 'red'); buscarCampanhas() }
+      if (dados.tipo === 'limite_diario') { mostrarFeedback(`⛔ Limite diário atingido. Campanha pausada.`, 'amber'); buscarCampanhas() }
+      if (dados.tipo === 'pausa_longa') mostrarFeedback(`☕ Pausa de ${dados.minutos} min para segurança...`, 'amber')
     }
 
-    es.onerror = () => { setWppStatus(prev => ({ ...prev, _botOffline: true })) }
+    es.onerror = () => setBotOffline(true)
 
     axios.get(`${botApi}/wpp/status`)
-      .then(r => setWppStatus(prev => ({ ...prev, ...r.data })))
-      .catch(() => setWppStatus(prev => ({ ...prev, _botOffline: true })))
+      .then(r => { setChips(r.data.chips || []); setFilaStatus(r.data.fila) })
+      .catch(() => setBotOffline(true))
 
     axios.get(`${botApi}/wpp/config`).then(r => setBotConfig(r.data)).catch(console.error)
     buscarCampanhas()
@@ -161,17 +173,24 @@ export default function DisparosTab({ selecionados, onLimparSelecionados, botApi
     setTimeout(() => setFeedback(null), 4000)
   }
 
-  const iniciarWpp = async () => {
+  const adicionarChip = async () => {
     try {
-      await axios.post(`${botApi}/wpp/iniciar`)
-      setWppStatus(prev => ({ ...prev, estado: 'aguardando_qr' }))
-    } catch (e) { mostrarFeedback('Erro ao iniciar bot. Verifique se o servidor está rodando.', 'red') }
+      await axios.post(`${botApi}/chips`, { apelido: apelidoNovoChip || undefined })
+      setApelidoNovoChip('')
+      mostrarFeedback('Chip adicionado! Aguarde o QR code.', 'green')
+    } catch (e) { mostrarFeedback(e.response?.data?.erro || 'Erro ao adicionar chip.', 'red') }
   }
 
-  const desconectarWpp = async () => {
-    if (!confirm('Desconectar WhatsApp?')) return
-    await axios.post(`${botApi}/wpp/desconectar`)
-    setWppStatus({ estado: 'desconectado', qrBase64: null, fila: null })
+  const removerChip = async (chipId) => {
+    if (!confirm('Remover este chip?')) return
+    await axios.delete(`${botApi}/chips/${chipId}`)
+    setChips(prev => prev.filter(c => c.id !== chipId))
+    mostrarFeedback('Chip removido.', 'amber')
+  }
+
+  const reconectarChip = async (chipId) => {
+    await axios.post(`${botApi}/chips/${chipId}/reconectar`)
+    mostrarFeedback('Reconectando... aguarde o QR code.', 'amber')
   }
 
   const criarCampanha = async () => {
@@ -241,7 +260,7 @@ export default function DisparosTab({ selecionados, onLimparSelecionados, botApi
     catch (e) { mostrarFeedback('Erro ao salvar.', 'red') }
   }
 
-  const { estado, qrBase64, _botOffline } = wppStatus
+  const totalConectados = chips.filter(c => c.estado === 'conectado').length
 
   function calcularETA(camp) {
     if (!botConfig) return null
@@ -278,74 +297,73 @@ export default function DisparosTab({ selecionados, onLimparSelecionados, botApi
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
 
-          {/* WhatsApp */}
+          {/* ─── Chips WhatsApp ─── */}
           <Card>
-            <CardTitle icon={Smartphone}>Conexão WhatsApp</CardTitle>
+            <CardTitle icon={Smartphone}>Chips WhatsApp</CardTitle>
 
-            {_botOffline && (
-              <div style={{
-                padding: '10px 12px', borderRadius: 'var(--radius-sm)',
-                background: 'var(--red-soft)', border: '1px solid rgba(248,113,113,0.15)',
-                fontSize: 12, color: 'var(--red)', marginBottom: 12,
-                display: 'flex', alignItems: 'flex-start', gap: 8,
-              }}>
+            {botOffline && (
+              <div style={{ padding: '10px 12px', borderRadius: 'var(--radius-sm)', background: 'var(--red-soft)', border: '1px solid rgba(248,113,113,0.15)', fontSize: 12, color: 'var(--red)', marginBottom: 12, display: 'flex', alignItems: 'flex-start', gap: 8 }}>
                 <AlertTriangle size={14} style={{ flexShrink: 0, marginTop: 1 }} />
-                <div>
-                  Bot offline. Inicie o servidor:<br />
-                  <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-2)' }}>cd whatsapp-bot && npm start</span>
-                </div>
+                <div>Bot offline. Inicie o servidor:<br /><span style={{ fontFamily: 'var(--font-mono)', fontSize: 11 }}>cd whatsapp-bot && npm start</span></div>
               </div>
             )}
 
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14 }}>
-              {estado === 'conectado'
-                ? <Wifi size={14} style={{ color: 'var(--green)' }} />
-                : <WifiOff size={14} style={{ color: 'var(--text-3)' }} />
-              }
-              <span style={{ fontSize: 13, color: 'var(--text-1)', fontWeight: 500 }}>
-                {estado === 'conectado' ? 'Conectado' : estado === 'aguardando_qr' ? 'Aguardando QR code...' : 'Desconectado'}
-              </span>
+            {/* Lista de chips */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 12 }}>
+              {chips.length === 0 && (
+                <div style={{ fontSize: 12, color: 'var(--text-3)', textAlign: 'center', padding: '12px 0' }}>Nenhum chip adicionado.<br />Adicione abaixo.</div>
+              )}
+              {chips.map(chip => (
+                <div key={chip.id} style={{ background: 'var(--bg-base)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '10px 12px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: chip.qrBase64 ? 8 : 0 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      {chip.estado === 'conectado' ? <Wifi size={13} style={{ color: 'var(--green)' }} /> : chip.estado === 'aguardando_qr' ? <Loader2 size={13} style={{ color: 'var(--amber)', animation: 'spin 1s linear infinite' }} /> : <WifiOff size={13} style={{ color: 'var(--text-3)' }} />}
+                      <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-1)' }}>{chip.apelido}</span>
+                      <span style={{ fontSize: 10, color: chip.estado === 'conectado' ? 'var(--green)' : chip.estado === 'aguardando_qr' ? 'var(--amber)' : 'var(--text-3)', background: chip.estado === 'conectado' ? 'rgba(74,222,128,0.1)' : 'var(--bg-elevated)', padding: '1px 6px', borderRadius: 99 }}>
+                        {chip.estado === 'conectado' ? 'Conectado' : chip.estado === 'aguardando_qr' ? 'Aguardando QR' : chip.estado === 'iniciando' ? 'Iniciando...' : 'Desconectado'}
+                      </span>
+                    </div>
+                    <div style={{ display: 'flex', gap: 4 }}>
+                      {chip.estado === 'desconectado' && <Btn cor="ghost" icon={RefreshCw} onClick={() => reconectarChip(chip.id)}>Reconectar</Btn>}
+                      <Btn cor="red" icon={Trash2} onClick={() => removerChip(chip.id)}>Remover</Btn>
+                    </div>
+                  </div>
+                  {chip.qrBase64 && (
+                    <div style={{ textAlign: 'center', marginTop: 8 }}>
+                      <div style={{ fontSize: 11, color: 'var(--text-2)', marginBottom: 6 }}>Abra o WhatsApp → <b>Dispositivos vinculados</b> → <b>Vincular</b></div>
+                      <img src={chip.qrBase64} alt="QR" style={{ width: 160, height: 160, borderRadius: 'var(--radius-sm)', border: '2px solid var(--border)', background: '#fff' }} />
+                    </div>
+                  )}
+                </div>
+              ))}
             </div>
 
-            {qrBase64 && (
-              <div style={{ textAlign: 'center', marginBottom: 14 }}>
-                <div style={{ fontSize: 12, color: 'var(--text-2)', marginBottom: 8, lineHeight: 1.5 }}>
-                  Abra o WhatsApp → <b>Dispositivos vinculados</b> → <b>Vincular dispositivo</b>
-                </div>
-                <img src={qrBase64} alt="QR Code" style={{
-                  width: 180, height: 180, borderRadius: 'var(--radius-md)',
-                  border: '2px solid var(--border)', background: '#fff',
-                }} />
-                <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 6 }}>Renova automaticamente a cada 30s</div>
+            {/* Adicionar chip */}
+            <div style={{ borderTop: '1px solid var(--border)', paddingTop: 10 }}>
+              <Label>Adicionar novo chip</Label>
+              <div style={{ display: 'flex', gap: 6 }}>
+                <input style={{ ...inputStyle, flex: 1 }} placeholder="Apelido (ex: Chip 1 - Vendas)" value={apelidoNovoChip} onChange={e => setApelidoNovoChip(e.target.value)} />
+                <Btn cor="green" icon={Plus} onClick={adicionarChip} disabled={botOffline}>Adicionar</Btn>
               </div>
-            )}
+            </div>
 
-            {estado === 'conectado' && wppStatus.fila && (
-              <div style={{
-                padding: '8px 12px', borderRadius: 'var(--radius-sm)',
-                background: 'var(--bg-base)', border: '1px solid var(--border)',
-                fontSize: 12, marginBottom: 12,
-              }}>
+            {/* Status da fila */}
+            {totalConectados > 0 && filaStatus && (
+              <div style={{ marginTop: 10, padding: '8px 12px', borderRadius: 'var(--radius-sm)', background: 'var(--bg-base)', border: '1px solid var(--border)', fontSize: 12 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text-2)', marginBottom: 4 }}>
+                  <span>Chips conectados:</span>
+                  <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--green)', fontWeight: 700 }}>{totalConectados}</span>
+                </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text-2)', marginBottom: 4 }}>
                   <span>Na fila:</span>
-                  <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-1)' }}>{wppStatus.fila.tamanho ?? 0}</span>
+                  <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-1)' }}>{filaStatus.tamanho ?? 0}</span>
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text-2)' }}>
                   <span>Enviados hoje:</span>
-                  <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--green)' }}>{wppStatus.fila.enviadosHoje ?? 0}/{wppStatus.fila.limiteD ?? 50}</span>
+                  <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--green)' }}>{filaStatus.enviadosHoje ?? 0}/{filaStatus.limiteD ?? 35}</span>
                 </div>
               </div>
             )}
-
-            <div style={{ display: 'flex', gap: 8 }}>
-              {estado === 'desconectado' && <Btn cor="green" icon={Wifi} onClick={iniciarWpp} disabled={_botOffline}>Conectar</Btn>}
-              {estado === 'aguardando_qr' && (
-                <span style={{ fontSize: 12, color: 'var(--amber)', display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} /> Escaneie o QR code...
-                </span>
-              )}
-              {estado === 'conectado' && <Btn cor="red" icon={WifiOff} onClick={desconectarWpp}>Desconectar</Btn>}
-            </div>
           </Card>
 
           {/* Config */}
@@ -472,7 +490,7 @@ export default function DisparosTab({ selecionados, onLimparSelecionados, botApi
 
                   <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                     {(camp.status === 'rascunho' || camp.status === 'pausada') && (
-                      <Btn cor="green" icon={Play} onClick={() => iniciarCampanha(camp._id)} disabled={estado !== 'conectado'}>
+                      <Btn cor="green" icon={Play} onClick={() => iniciarCampanha(camp._id)} disabled={totalConectados === 0}>
                         {camp.status === 'pausada' ? `Retomar (${camp.totalLeads - camp.totalEnviados - camp.totalErros} restantes)` : 'Iniciar'}
                       </Btn>
                     )}

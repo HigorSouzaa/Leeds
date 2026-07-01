@@ -1,12 +1,18 @@
 # api/main.py - API FastAPI para o painel de leads
 
-from fastapi import FastAPI, Query, HTTPException
+from fastapi import FastAPI, Query, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from pymongo import MongoClient, DESCENDING
 from bson import ObjectId
 from datetime import datetime
 from typing import Optional
 import os
+import shutil
+
+# ─── Pasta para documentos enviados ──────────────────────────────
+UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "uploads")
+os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 # ─── Configuração ────────────────────────────────────────────────
 MONGODB_URI = os.getenv(
@@ -31,6 +37,7 @@ app.add_middleware(
 client = MongoClient(MONGODB_URI)
 db = client[DATABASE_NAME]
 col = db[COLLECTION_NAME]
+col_clientes = db["clientes"]
 
 
 def serialize(doc: dict) -> dict:
@@ -279,4 +286,181 @@ def stop_scraper():
         scraper_logs.append("🛑 Bot forçado a parar pelo usuário.")
         return {"ok": True, "msg": "Bot parado."}
     return {"ok": False, "msg": "Bot não estava rodando."}
+
+
+# ─── Clientes ────────────────────────────────────────────────────
+
+def serialize_cliente(doc: dict) -> dict:
+    doc["id"] = str(doc.pop("_id"))
+    for campo in ["criado_em", "atualizado_em", "data_assinatura"]:
+        if isinstance(doc.get(campo), datetime):
+            doc[campo] = doc[campo].isoformat()
+    return doc
+
+
+@app.get("/clientes")
+def listar_clientes(
+    busca: Optional[str] = None,
+    status: Optional[str] = None,
+):
+    filtro = {}
+    if busca:
+        filtro["$or"] = [
+            {"nome": {"$regex": busca, "$options": "i"}},
+            {"empresa": {"$regex": busca, "$options": "i"}},
+            {"telefone": {"$regex": busca, "$options": "i"}},
+        ]
+    if status:
+        filtro["status_cliente"] = status
+
+    docs = list(col_clientes.find(filtro).sort("criado_em", DESCENDING))
+    return [serialize_cliente(d) for d in docs]
+
+
+@app.post("/clientes")
+def criar_cliente(body: dict):
+    if not body.get("nome"):
+        raise HTTPException(400, "O campo 'nome' é obrigatório")
+
+    novo = {
+        # Dados básicos
+        "nome":            body.get("nome", ""),
+        "empresa":         body.get("empresa", ""),
+        "telefone":        body.get("telefone", ""),
+        "email":           body.get("email", ""),
+        "cidade":          body.get("cidade", ""),
+        # Venda
+        "data_assinatura": datetime.fromisoformat(body["data_assinatura"]) if body.get("data_assinatura") else None,
+        "valor_contrato":  body.get("valor_contrato", ""),
+        "tipo_servico":    body.get("tipo_servico", ""),
+        "data_renovacao":  datetime.fromisoformat(body["data_renovacao"]) if body.get("data_renovacao") else None,
+        # Servidor / VPS
+        "ip_servidor":     body.get("ip_servidor", ""),
+        "link_painel":     body.get("link_painel", ""),
+        "plano":           body.get("plano", ""),
+        "senha_inicial":   body.get("senha_inicial", ""),
+        "obs_tecnicas":    body.get("obs_tecnicas", ""),
+        # Controle
+        "status_cliente":  body.get("status_cliente", "ativo"),  # ativo | inativo | implantacao
+        "lead_id":         body.get("lead_id", ""),  # referência ao lead de origem
+        "documento_nome":  "",  # preenchido no upload
+        "notas":           [],
+        "criado_em":       datetime.utcnow(),
+        "atualizado_em":   datetime.utcnow(),
+    }
+
+    result = col_clientes.insert_one(novo)
+    novo["_id"] = result.inserted_id
+
+    # Se veio de um lead, marca o lead como cliente
+    if body.get("lead_id"):
+        try:
+            col.update_one(
+                {"_id": ObjectId(body["lead_id"])},
+                {"$set": {"status": "qualificado", "atualizado_em": datetime.utcnow()}}
+            )
+        except Exception:
+            pass
+
+    return serialize_cliente(novo)
+
+
+@app.get("/clientes/{cliente_id}")
+def obter_cliente(cliente_id: str):
+    doc = col_clientes.find_one({"_id": ObjectId(cliente_id)})
+    if not doc:
+        raise HTTPException(404, "Cliente não encontrado")
+    return serialize_cliente(doc)
+
+
+@app.put("/clientes/{cliente_id}")
+def editar_cliente(cliente_id: str, body: dict):
+    update = {
+        "nome":            body.get("nome", ""),
+        "empresa":         body.get("empresa", ""),
+        "telefone":        body.get("telefone", ""),
+        "email":           body.get("email", ""),
+        "cidade":          body.get("cidade", ""),
+        "valor_contrato":  body.get("valor_contrato", ""),
+        "tipo_servico":    body.get("tipo_servico", ""),
+        "ip_servidor":     body.get("ip_servidor", ""),
+        "link_painel":     body.get("link_painel", ""),
+        "plano":           body.get("plano", ""),
+        "senha_inicial":   body.get("senha_inicial", ""),
+        "obs_tecnicas":    body.get("obs_tecnicas", ""),
+        "status_cliente":  body.get("status_cliente", "ativo"),
+        "atualizado_em":   datetime.utcnow(),
+    }
+    if body.get("data_assinatura"):
+        update["data_assinatura"] = datetime.fromisoformat(body["data_assinatura"])
+    if body.get("data_renovacao"):
+        update["data_renovacao"] = datetime.fromisoformat(body["data_renovacao"])
+
+    result = col_clientes.update_one({"_id": ObjectId(cliente_id)}, {"$set": update})
+    if result.matched_count == 0:
+        raise HTTPException(404, "Cliente não encontrado")
+    return {"ok": True}
+
+
+@app.post("/clientes/{cliente_id}/nota")
+def adicionar_nota(cliente_id: str, body: dict):
+    nota = {
+        "texto": body.get("texto", ""),
+        "data":  datetime.utcnow().isoformat(),
+    }
+    col_clientes.update_one(
+        {"_id": ObjectId(cliente_id)},
+        {"$push": {"notas": nota}, "$set": {"atualizado_em": datetime.utcnow()}}
+    )
+    return {"ok": True}
+
+
+@app.delete("/clientes/{cliente_id}")
+def deletar_cliente(cliente_id: str):
+    # Remove documento do disco se existir
+    doc = col_clientes.find_one({"_id": ObjectId(cliente_id)})
+    if doc and doc.get("documento_nome"):
+        caminho = os.path.join(UPLOAD_DIR, doc["documento_nome"])
+        if os.path.exists(caminho):
+            os.remove(caminho)
+
+    result = col_clientes.delete_one({"_id": ObjectId(cliente_id)})
+    if result.deleted_count == 0:
+        raise HTTPException(404, "Cliente não encontrado")
+    return {"ok": True}
+
+
+@app.post("/clientes/{cliente_id}/documento")
+async def upload_documento(cliente_id: str, arquivo: UploadFile = File(...)):
+    # Valida tipo
+    tipos_ok = ["application/pdf", "image/png", "image/jpeg", "image/jpg"]
+    if arquivo.content_type not in tipos_ok:
+        raise HTTPException(400, "Tipo de arquivo não permitido. Use PDF, PNG ou JPG.")
+
+    ext = arquivo.filename.rsplit(".", 1)[-1]
+    nome_arquivo = f"contrato_{cliente_id}.{ext}"
+    caminho = os.path.join(UPLOAD_DIR, nome_arquivo)
+
+    with open(caminho, "wb") as f:
+        shutil.copyfileobj(arquivo.file, f)
+
+    col_clientes.update_one(
+        {"_id": ObjectId(cliente_id)},
+        {"$set": {"documento_nome": nome_arquivo, "atualizado_em": datetime.utcnow()}}
+    )
+    return {"ok": True, "arquivo": nome_arquivo}
+
+
+@app.get("/clientes/{cliente_id}/documento")
+def download_documento(cliente_id: str):
+    doc = col_clientes.find_one({"_id": ObjectId(cliente_id)})
+    if not doc or not doc.get("documento_nome"):
+        raise HTTPException(404, "Nenhum documento enviado para este cliente")
+
+    caminho = os.path.join(UPLOAD_DIR, doc["documento_nome"])
+    if not os.path.exists(caminho):
+        raise HTTPException(404, "Arquivo não encontrado no servidor")
+
+    return FileResponse(caminho, filename=doc["documento_nome"])
+
 
